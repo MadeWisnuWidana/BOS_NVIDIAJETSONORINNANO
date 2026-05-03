@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Expression Display</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Paho MQTT Client Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <!-- MediaPipe Face Detection -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"
+        crossorigin="anonymous"></script>
+</head>
+
+<body>
+    <canvas id="faceCanvas"></canvas>
+
+    <!-- Hidden webcam video for face tracking -->
+    <video id="webcamVideo" autoplay muted playsinline style="display:none;"></video>
+
+    <!-- ══════════════════════════════════════════
+         DEBUG PANEL — pojok kiri atas
+         Toggle dengan tombol [D]
+         ══════════════════════════════════════════ -->
+    <div id="debugPanel">
+
+        <!-- ── A. Face Detection Status ── -->
+        <div id="debugStatus">
+            <span id="debugDot"></span>
+            <span id="debugText">Inisialisasi...</span>
+        </div>
+
+        <!-- ── B. Mini webcam preview with bbox overlay ── -->
+        <div id="debugPreviewWrap">
+            <video id="debugVideo" autoplay muted playsinline></video>
+            <canvas id="debugCanvas"></canvas>
+        </div>
+
+        <!-- ── C. Head Control Payload ── -->
+        <div id="hcPanel">
+            <div class="hc-title">🤖 Robot Head Control</div>
+
+            <!-- Visual head angle bar -->
+            <div class="hc-row">
+                <span class="hc-label">Pan Angle</span>
+                <div class="hc-bar-wrap">
+                    <div class="hc-bar-track">
+                        <div id="hcBarFill" class="hc-bar-fill"></div>
+                        <div class="hc-bar-center"></div>
+                    </div>
+                    <span id="hcHeadAngle" class="hc-val">0.0°</span>
+                </div>
+            </div>
+
+            <!-- Gaze readings -->
+            <div class="hc-row">
+                <span class="hc-label">Raw Gaze</span>
+                <span id="hcRawGaze" class="hc-val mono">x:0.00 y:0.00</span>
+            </div>
+            <div class="hc-row">
+                <span class="hc-label">Comp. Gaze X</span>
+                <span id="hcCompGaze" class="hc-val mono">0.00</span>
+            </div>
+
+            <!-- Edge hold timer -->
+            <div class="hc-row">
+                <span class="hc-label">
+                    <span id="hcEdgeDot" class="hc-dot"></span> Edge Hold
+                </span>
+                <div class="hc-hold-wrap">
+                    <div class="hc-hold-track">
+                        <div id="hcHoldBar" class="hc-hold-bar"></div>
+                    </div>
+                    <span id="hcHoldPct" class="hc-val mono">0%</span>
+                </div>
+            </div>
+
+            <!-- Payload preview -->
+            <div class="hc-payload-label">Payload (dummy):</div>
+            <pre id="hcPayload" class="hc-payload">{}</pre>
+        </div>
+
+        <div id="debugHint">Tekan [D] sembunyikan · [T] tracking · [R] reset head · [Shift+D] default · [M] mirror · [C]
+            conversation</div>
+    </div>
+
+    <!-- Mode Indicator Badge (pojok kanan bawah) -->
+    <!-- <div id="modeIndicator" class="mode-badge mode-default">🎭 Default</div> -->
+
+    <!-- Status indicator MQTT (pojok kanan atas) -->
+    <div id="statusIndicator">
+        <span id="mqttStatus">Disconnected</span>
+    </div>
+
+    <!-- ── Renderer Feature Modules (urutan load = urutan dependency) ── -->
+    <script src="js/renderers/fr-transform.js"></script>
+    <script src="js/renderers/fr-blink.js"></script>
+    <script src="js/renderers/fr-cables.js"></script>
+    <script src="js/renderers/fr-eyes.js"></script>
+    <script src="js/renderers/fr-mouths.js"></script>
+
+    <!-- ── Orchestrator & Application ── -->
+    <script src="js/face-renderer.js"></script>
+    <script src="js/face-tracker.js"></script>
+    <script src="js/mqtt-client.js"></script>
+    <script src="js/app.js"></script>
+</body>
+
+</html>
