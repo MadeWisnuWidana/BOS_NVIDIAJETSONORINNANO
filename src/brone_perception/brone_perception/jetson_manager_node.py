@@ -1,3 +1,13 @@
+import fcntl
+import sys
+
+try:
+    _pid_file_jm = open("/tmp/jetson_manager_node.pid", "w")
+    fcntl.flock(_pid_file_jm, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except IOError:
+    print("⚠️ Another instance of jetson_manager_node.py is already running! Exiting duplicate process.")
+    sys.exit(0)
+
 #!/usr/bin/env python3
 """
 =============================================================================
@@ -55,6 +65,8 @@ class JetsonManagerNode(Node):
         self.display_process = None
         self.voice_process   = None
         self.fer_process     = None
+        self.camera_process  = None
+        self.gaze_process    = None
         self.voice_mode      = None
 
         self.current_pan  = 0.0
@@ -140,8 +152,10 @@ class JetsonManagerNode(Node):
             self._start_display()
 
         # FER (Vision) — [FIX #3][FIX #4] Gunakan FER v2
-        elif command in ['start_fer', 'eyefollow', 'fer']:
+        elif command in ['start_fer', 'fer']:
             self._start_fer()
+        elif command in ['start_gaze', 'eyefollow']:
+            self._start_gaze()
         elif command == 'stop_fer':
             self._stop_fer()
 
@@ -200,32 +214,68 @@ class JetsonManagerNode(Node):
             cwd=DISPLAY_DIR
         )
 
+    def _start_gaze(self):
+        """Hanya jalankan Camera + Gaze. Tanpa FER v2."""
+        # 1. Jalankan Camera Node
+        if self.camera_process is None or self.camera_process.poll() is not None:
+            self.get_logger().info('[GAZE] Menjalankan brone_camera_node...')
+            self.camera_process = subprocess.Popen(
+                ["ros2", "run", "brone_perception", "brone_camera_node"]
+            )
+        
+        # 2. Jalankan Gaze Node
+        if self.gaze_process is None or self.gaze_process.poll() is not None:
+            self.get_logger().info('[GAZE] Menjalankan brone_gaze_node...')
+            self.gaze_process = subprocess.Popen(
+                ["ros2", "run", "brone_perception", "brone_gaze_node"]
+            )
+        
+        self.get_logger().info('[GAZE] Camera + Gaze aktif. FER v2 TIDAK dijalankan.')
+
     def _start_fer(self):
-        """[FIX #3][FIX #4] Jalankan FER Publisher V2."""
+        """Jalankan Camera, FER V2, dan Gaze sebagai node ROS 2."""
+        # 1. Jalankan Camera Node
+        if self.camera_process is None or self.camera_process.poll() is not None:
+            self.get_logger().info('[VISION] Menjalankan brone_camera_node...')
+            self.camera_process = subprocess.Popen(
+                ["ros2", "run", "brone_perception", "brone_camera_node"]
+            )
+        
+        # 2. Jalankan Gaze Node
+        if self.gaze_process is None or self.gaze_process.poll() is not None:
+            self.get_logger().info('[VISION] Menjalankan brone_gaze_node...')
+            self.gaze_process = subprocess.Popen(
+                ["ros2", "run", "brone_perception", "brone_gaze_node"]
+            )
+
+        # 3. Jalankan FER v2 (sekarang publisher_ros.py)
         if self.fer_process and self.fer_process.poll() is None:
             self.get_logger().info('[FER] FER v2 sudah berjalan, skip.')
             return
 
-        self.get_logger().info('[FER] Menjalankan FER Publisher V2...')
-        # Gunakan venv jika tersedia, fallback ke python3 sistem
+        self.get_logger().info('[FER] Menjalankan FER Publisher V2 (ROS)...')
         python_bin = FER_V2_VENV if os.path.exists(FER_V2_VENV) else "python3"
         try:
             self.fer_process = subprocess.Popen(
-                [python_bin, "publisher.py", "--headless"],
+                [python_bin, "publisher_ros.py"],
                 cwd=FER_V2_DIR
             )
         except Exception as e:
             self.get_logger().error(f'[FER] Gagal menjalankan FER v2: {e}')
 
     def _stop_fer(self):
-        if self.fer_process:
-            self.get_logger().info('[FER] Mematikan FER Publisher...')
-            self.fer_process.terminate()
-            try:
-                self.fer_process.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                self.fer_process.kill()
-            self.fer_process = None
+        self.get_logger().info('[VISION] Mematikan Vision Nodes (FER, Gaze, Camera)...')
+        for proc in [self.fer_process, self.gaze_process, self.camera_process]:
+            if proc:
+                import signal
+                proc.send_signal(signal.SIGINT) # Graceful exit ROS 2
+                try:
+                    proc.wait(timeout=3.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        self.fer_process = None
+        self.gaze_process = None
+        self.camera_process = None
 
     def _start_voice(self, mode):
         if self.voice_process and self.voice_process.poll() is None:
@@ -239,9 +289,13 @@ class JetsonManagerNode(Node):
                 # [FIX #1] Gunakan venv python dari brone-sst-tts
                 venv_python = os.path.join(SST_TTS_DIR, "venv", "bin", "python3")
                 python_bin  = venv_python if os.path.exists(venv_python) else "python3"
+                env = os.environ.copy()
+                env["XDG_RUNTIME_DIR"] = "/run/user/1000"
+                env["PULSE_SERVER"] = "unix:/run/user/1000/pulse/native"
                 self.voice_process = subprocess.Popen(
                     [python_bin, "main.py"],
-                    cwd=SST_TTS_DIR
+                    cwd=SST_TTS_DIR,
+                    env=env
                 )
             else:
                 self.voice_process = subprocess.Popen(

@@ -37,6 +37,7 @@ setup(
             'brone_vad_node = brone_perception.brone_vad:main',
             'civitas_node = brone_perception.civitas_node:main',
             'expression_arbitrator = brone_perception.expression_arbitrator:main',
+            'brone_gaze_node = brone_perception.brone_gaze_node:main',
         ],
     },
 )

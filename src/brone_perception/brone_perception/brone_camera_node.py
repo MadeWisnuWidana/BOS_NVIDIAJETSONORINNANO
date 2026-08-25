@@ -1,69 +1,63 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge
 import cv2
-import json
+import numpy as np
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy, QoSHistoryPolicy
 
 class BroneCameraNode(Node):
     def __init__(self):
-        super().__init__('brone_camera_server')
-        self.get_logger().info('[Camera Server] Starting...')
+        super().__init__('brone_camera_node')
         
-        self.publisher = self.create_publisher(Image, '/brone/camera/image_raw', 10)
-        self.cmd_sub = self.create_subscription(String, '/brone/module_control', self.control_callback, 10)
+        # QoS Profile for Sensor Data (Best Effort)
+        qos_profile = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        
+        self.publisher_ = self.create_publisher(CompressedImage, '/image_raw/compressed', qos_profile)
+        self.timer = self.create_timer(1.0 / 30.0, self.timer_callback) # 30 FPS target
+        
+        self.cap = cv2.VideoCapture(0)
+        # Optimasi kamera USB (Logitech Brio 4K)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        
+        if not self.cap.isOpened():
+            self.get_logger().error("Tidak dapat membuka kamera (/dev/video0)")
         
         self.bridge = CvBridge()
-        self.cap = None
-        self.timer = None
-        
-        # Track active modules
-        self.active_modules = {
-            'fer': False,
-            'civitas': False
-        }
-        
-    def control_callback(self, msg):
-        try:
-            data = json.loads(msg.data)
-            module = data.get('module')
-            state = data.get('state')
+        self.get_logger().info("BRONE Camera Node berjalan. Mempublikasikan ke /image_raw")
+
+    def timer_callback(self):
+        if not self.cap.isOpened():
+            return
             
-            if module in self.active_modules:
-                self.active_modules[module] = (state == 'start')
-                self.get_logger().info(f'[Camera Server] Module {module} state changed to {state}')
-                self.check_camera_state()
-        except Exception as e:
-            self.get_logger().error(f'Error parsing control msg: {e}')
+        ret, frame = self.cap.read()
+        if ret:
+            # Kompres frame ke JPEG (~40 KB)
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+            result, encimg = cv2.imencode('.jpg', frame, encode_param)
             
-    def check_camera_state(self):
-        # If any module needs camera, open it
-        needs_camera = any(self.active_modules.values())
-        
-        if needs_camera and self.cap is None:
-            self.get_logger().info('[Camera Server] Opening /dev/video0...')
-            self.cap = cv2.VideoCapture(0)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            # Create timer to read frames at ~30 FPS
-            self.timer = self.create_timer(1.0/30.0, self.publish_frame)
-            
-        elif not needs_camera and self.cap is not None:
-            self.get_logger().info('[Camera Server] Releasing /dev/video0 (No active modules)...')
-            if self.timer:
-                self.timer.cancel()
-                self.timer = None
+            if result:
+                msg = CompressedImage()
+                msg.header.stamp = self.get_clock().now().to_msg()
+                msg.header.frame_id = "camera_link"
+                msg.format = "jpeg"
+                msg.data = np.array(encimg).tobytes()
+                
+                self.publisher_.publish(msg)
+
+    def destroy_node(self):
+        if self.cap.isOpened():
             self.cap.release()
-            self.cap = None
-            
-    def publish_frame(self):
-        if self.cap and self.cap.isOpened():
-            ret, frame = self.cap.read()
-            if ret:
-                msg = self.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
-                self.publisher.publish(msg)
+        super().destroy_node()
 
 def main(args=None):
     rclpy.init(args=args)
@@ -73,8 +67,6 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        if node.cap:
-            node.cap.release()
         node.destroy_node()
         rclpy.shutdown()
 
